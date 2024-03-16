@@ -1,0 +1,153 @@
+﻿//
+// UMU: This is a lite version of GSL for WDK
+//
+
+#pragma once
+
+#ifdef _KERNEL_MODE
+namespace std {
+
+#define _CONSTEXPR20 constexpr
+#define _EXPORT_STD
+// P0607R0 Inline Variables For The STL
+#if _HAS_CXX17
+#define _INLINE_VAR inline
+#else
+#define _INLINE_VAR
+#endif
+#define _NODISCARD [[nodiscard]]
+#define GSL_SUPPRESS(x) [[gsl::suppress(x)]]
+
+_EXPORT_STD template <class _Ty, _Ty _Val>
+struct integral_constant {
+    static constexpr _Ty value = _Val;
+
+    using value_type = _Ty;
+    using type       = integral_constant;
+
+    constexpr operator value_type() const noexcept {
+        return value;
+    }
+
+    _NODISCARD constexpr value_type operator()() const noexcept {
+        return value;
+    }
+};
+
+_EXPORT_STD template <bool _Val>
+using bool_constant = integral_constant<bool, _Val>;
+
+_EXPORT_STD using true_type  = bool_constant<true>;
+_EXPORT_STD using false_type = bool_constant<false>;
+
+_EXPORT_STD template <bool _Test, class _Ty = void>
+struct enable_if {}; // no member "type" when !_Test
+
+template <class _Ty>
+struct enable_if<true, _Ty> { // type is _Ty for _Test
+    using type = _Ty;
+};
+
+_EXPORT_STD template <bool _Test, class _Ty = void>
+using enable_if_t = typename enable_if<_Test, _Ty>::type;
+
+_EXPORT_STD template <class>
+_INLINE_VAR constexpr bool is_pointer_v = false; // determine whether _Ty is a pointer
+
+template <class _Ty>
+_INLINE_VAR constexpr bool is_pointer_v<_Ty*> = true;
+
+template <class _Ty>
+_INLINE_VAR constexpr bool is_pointer_v<_Ty* const> = true;
+
+template <class _Ty>
+_INLINE_VAR constexpr bool is_pointer_v<_Ty* volatile> = true;
+
+template <class _Ty>
+_INLINE_VAR constexpr bool is_pointer_v<_Ty* const volatile> = true;
+
+_EXPORT_STD template <class _Ty>
+struct is_pointer : bool_constant<is_pointer_v<_Ty>> {};
+
+// UMU: always noexcept, because we disable exceptions in kernel mode!
+template <class _Ty, class _Other = _Ty>
+_CONSTEXPR20 _Ty exchange(_Ty& _Val, _Other&& _New_val) noexcept {
+    // assign _New_val to _Val, return previous _Val
+    _Ty _Old_val = static_cast<_Ty&&>(_Val);
+    _Val         = static_cast<_Other&&>(_New_val);
+    return _Old_val;
+}
+
+template <class _Ty>
+struct remove_reference {
+    using type                 = _Ty;
+    using _Const_thru_ref_type = const _Ty;
+};
+
+template <class _Ty>
+using remove_reference_t = typename remove_reference<_Ty>::type;
+
+template <class _Ty>
+_NODISCARD constexpr remove_reference_t<_Ty>&& move(_Ty&& _Arg) noexcept { // forward _Arg as movable
+    return static_cast<remove_reference_t<_Ty>&&>(_Arg);
+}
+
+template <class _Ty>
+_NODISCARD constexpr _Ty&& forward(
+    remove_reference_t<_Ty>& _Arg) noexcept { // forward an lvalue as either an lvalue or an rvalue
+    return static_cast<_Ty&&>(_Arg);
+}
+
+}
+#else   // #ifdef _KERNEL_MODE
+#include <utility>
+#endif  // #ifdef _KERNEL_MODE
+
+namespace gsl {
+
+// final_action allows you to ensure something gets run at the end of a scope
+template <class F>
+class final_action {
+ public:
+  explicit final_action(const F& ff) noexcept : f{ff} {}
+  explicit final_action(F&& ff) noexcept : f{std::move(ff)} {}
+
+  ~final_action() noexcept {
+    if (invoke)
+      f();
+  }
+
+  final_action(final_action&& other) noexcept
+      : f(std::move(other.f)), invoke(std::exchange(other.invoke, false)) {}
+
+  final_action(const final_action&) = delete;
+  void operator=(const final_action&) = delete;
+  void operator=(final_action&&) = delete;
+
+ private:
+  F f;
+  bool invoke = true;
+};
+
+// narrow_cast(): a searchable way to do narrowing casts of values
+template <class T, class U>
+constexpr T narrow_cast(U&& u) noexcept {
+  return static_cast<T>(std::forward<U>(u));
+}
+
+//
+// owner
+//
+// `gsl::owner<T>` is designed as a safety mechanism for code that must deal
+// directly with raw pointers that own memory. Ideally such code should be
+// restricted to the implementation of low-level abstractions. `gsl::owner` can
+// also be used as a stepping point in converting legacy code to use more modern
+// RAII constructs, such as smart pointers.
+//
+// T must be a pointer type
+// - disallow construction from any type other than pointer type
+//
+template <class T, class = std::enable_if_t<std::is_pointer<T>::value>>
+using owner = T;
+
+}
